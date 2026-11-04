@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VS Code Sim</title>
+<style>
+:root{--bg:#1e1e1e;--side:#252526;--act:#333;--tab:#2d2d2d;--bd:#3c3c3c;--fg:#ccc}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px 'Segoe UI',system-ui,sans-serif;overflow:hidden}
+#app{display:grid;grid-template-columns:48px 210px 1fr;grid-template-rows:1fr 22px;height:100%}
+#act{background:var(--act);display:flex;flex-direction:column;align-items:center;gap:20px;padding-top:12px;font-size:18px;opacity:.85}
+#side{background:var(--side);overflow:auto;border-right:1px solid #000}
+#side h4{margin:0;padding:10px 12px;font-size:11px;display:flex;justify-content:space-between;font-weight:400}
+#side h4 b{cursor:pointer;font-size:16px}
+.f{padding:3px 14px;cursor:pointer;display:flex;justify-content:space-between}
+.f:hover{background:#2a2d2e}.f.on{background:#37373d;color:#fff}
+.f i,.t i{font-style:normal;opacity:0}.f:hover i,.t i{opacity:.6}.f i:hover,.t i:hover{opacity:1}
+#main{display:flex;flex-direction:column;min-width:0}
+#tabs{display:flex;background:var(--side);height:35px}
+#tl{display:flex;overflow:hidden;flex:1}
+.t{display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--tab);border-right:1px solid var(--side);cursor:pointer;white-space:nowrap}
+.t.on{background:var(--bg);color:#fff;border-top:1px solid #007acc}
+#run{background:none;border:0;color:#4ec9b0;font:inherit;padding:0 14px;cursor:pointer}
+#run:hover{background:#333}
+#ed{flex:1;min-height:0}
+#term{height:250px;border-top:1px solid var(--bd);display:flex;flex-direction:column}
+#th{display:flex;justify-content:space-between;padding:4px 12px;font-size:11px}
+#clr{cursor:pointer}
+#out{flex:1;overflow:auto;padding:0 12px;font:13px Consolas,'Courier New',monospace;white-space:pre-wrap}
+#out .p{color:#4ec9b0}#out .e{color:#f48771}#out .d{color:#888}
+#ln{display:flex;padding:4px 12px 8px;font:13px Consolas,'Courier New',monospace}
+#ln span{color:#4ec9b0;margin-right:8px}
+#inp{flex:1;background:none;border:0;outline:0;color:var(--fg);font:inherit}
+#st{grid-column:1/-1;background:#007acc;color:#fff;display:flex;gap:16px;padding:0 10px;align-items:center;font-size:12px}
+#msg{margin-right:auto}
+</style></head><body>
+<div id="app">
+<div id="act"><span>📄</span><span>🔍</span><span>⎇</span><span>▶</span></div>
+<div id="side"><h4><span>EXPLORADOR</span><b id="nf" title="Novo arquivo">+</b></h4><div id="fl"></div></div>
+<div id="main">
+<div id="tabs"><div id="tl"></div><button id="run" title="F5 ou Ctrl+Enter">▶ Executar</button></div>
+<div id="ed"></div>
+<div id="term"><div id="th"><span>TERMINAL</span><span id="clr">limpar</span></div><div id="out"></div><div id="ln"><span>$</span><input id="inp" autocomplete="off" spellcheck="false"></div></div>
+</div>
+<div id="st"><span id="msg">Pronto</span><span id="pos">Ln 1, Col 1</span><span id="lg"></span><span>UTF-8</span></div>
+</div>
+<script>
+const $=s=>document.querySelector(s),B='https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min',PY='https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
+const L={py:'python',js:'javascript',c:'c',cpp:'cpp',java:'java',html:'html',json:'json',md:'markdown'},CM={py:'python',js:'node',c:'gcc',cpp:'g++',java:'java'};
+const ext=n=>n.split('.').pop(),has=n=>Object.hasOwn(files,n);
+const DEF={'hello.py':'nome = input("Seu nome: ")\nprint(f"Olá, {nome}!")\nfor i in range(3):\n    print(i)\n','hello.js':'console.log("Olá do JavaScript!");\n[1, 2, 3].forEach(n => console.log(n * 2));\n','hello.c':'#include <stdio.h>\n\nint main(void) {\n    printf("Olá do C!\\n");\n    return 0;\n}\n'};
+let files,open=[],cur,ed,models={},hist=[],hi=0,py;
+try{files=JSON.parse(localStorage.getItem('vsf'))}catch{}
+files=files||DEF;
+const save=()=>{try{localStorage.setItem('vsf',JSON.stringify(files))}catch{}};
+const w=(t,c)=>{const d=document.createElement('div');d.textContent=t||' ';if(c)d.className=c;$('#out').append(d);$('#out').scrollTop=1e9};
+const ld=u=>new Promise((r,j)=>{const s=document.createElement('script');s.src=u;s.onload=r;s.onerror=()=>j(new Error('sem internet?'));document.head.append(s)});
+
+// ---- editor (Monaco) ----
+ld(B+'/vs/loader.js').then(()=>{
+  require.config({paths:{vs:B+'/vs'}});
+  window.MonacoEnvironment={getWorkerUrl:()=>URL.createObjectURL(new Blob([`self.MonacoEnvironment={baseUrl:'${B}/'};importScripts('${B}/vs/base/worker/workerMain.js')`],{type:'text/javascript'}))};
+  require(['vs/editor/editor.main'],init);
+}).catch(e=>w('Não consegui carregar o editor: '+e.message,'e'));
+function init(){
+  ed=monaco.editor.create($('#ed'),{model:null,theme:'vs-dark',automaticLayout:true,fontSize:14,scrollBeyondLastLine:false});
+  ed.onDidChangeCursorPosition(e=>$('#pos').textContent=`Ln ${e.position.lineNumber}, Col ${e.position.column}`);
+  ed.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,()=>{save();$('#msg').textContent='Salvo'});
+  ed.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.Enter,runCur);
+  ed.addCommand(monaco.KeyCode.F5,runCur);
+  const k=Object.keys(files);if(k.length)openF(k[0]);draw();
+  w('Digite "help" para ver os comandos.','d');
+}
+function mdl(n){if(!models[n]){const m=monaco.editor.createModel(files[n],L[ext(n)]||'plaintext');m.onDidChangeContent(()=>{files[n]=m.getValue();save()});models[n]=m}return models[n]}
+function openF(n){if(!has(n))return;if(!open.includes(n))open.push(n);cur=n;ed.setModel(mdl(n));$('#lg').textContent=L[ext(n)]||'texto';draw();ed.focus()}
+function closeF(n){open=open.filter(x=>x!=n);if(cur==n){cur=open[open.length-1];ed.setModel(cur?mdl(cur):null)}draw()}
+function newF(n){if(!n||!/^[\w.\-]+$/.test(n))return w('Nome inválido (use letras, números, _ . -)','e');if(!has(n)){files[n]='';save()}openF(n)}
+function delF(n){if(!has(n))return w('rm: '+n+': arquivo não existe','e');closeF(n);delete files[n];if(models[n]){models[n].dispose();delete models[n]}save();draw()}
+function draw(){
+  $('#fl').innerHTML=Object.keys(files).map(n=>`<div class="f ${n==cur?'on':''}" data-n="${n}">${n}<i data-d="${n}">✕</i></div>`).join('');
+  $('#tl').innerHTML=open.map(n=>`<div class="t ${n==cur?'on':''}" data-n="${n}">${n}<i data-x="${n}">✕</i></div>`).join('');
+}
+document.addEventListener('click',e=>{const t=e.target;
+  if(t.dataset.d){if(confirm('Excluir '+t.dataset.d+'?'))delF(t.dataset.d);return}
+  if(t.dataset.x)return closeF(t.dataset.x);
+  const r=t.closest('[data-n]');if(r)openF(r.dataset.n)});
+$('#nf').onclick=()=>newF(prompt('Nome do arquivo (ex.: teste.py):'));
+$('#run').onclick=runCur;$('#clr').onclick=()=>$('#out').innerHTML='';
+
+// ---- execução ----
+async function runJS(code){
+  const fmt=a=>a.map(x=>{if(typeof x=='string')return x;try{return JSON.stringify(x)??String(x)}catch{return String(x)}}).join(' ');
+  const con={log:(...a)=>w(fmt(a)),info:(...a)=>w(fmt(a)),error:(...a)=>w(fmt(a),'e'),warn:(...a)=>w(fmt(a),'e')};
+  try{const AF=Object.getPrototypeOf(async function(){}).constructor;await new AF('console',code)(con)}catch(x){w(x.name+': '+x.message,'e')}
+}
+async function runPy(code){
+  if(!py){
+    w('Carregando Python (Pyodide)... só na primeira vez.','d');
+    try{
+      const {loadPyodide}=await import(PY+'pyodide.mjs');
+      py=await loadPyodide({indexURL:PY});
+      py.setStdout({batched:s=>w(s)});py.setStderr({batched:s=>w(s,'e')});
+      py.setStdin({stdin:()=>prompt('input():')??undefined});
+    }catch(x){w('Falha ao carregar o Python (precisa de internet): '+x.message,'e');return}
+  }
+  try{await py.runPythonAsync(code)}catch(x){w(String(x.message).trim(),'e')}
+}
+async function runSrv(e,code){
+  let stdin='';
+  if(/scanf|fgets|getchar|cin\b|Scanner|readLine/.test(code))stdin=(prompt('Entrada do programa (use \\n para separar linhas):')||'').replace(/\\n/g,'\n');
+  try{
+    const r=await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({e,code,stdin})});
+    const j=await r.json();
+    if(j.out)w(j.out.replace(/\n$/,''));if(j.err)w(j.err.replace(/\n$/,''),'e');
+    w('[finalizado com código '+(j.code??'?')+']','d');
+  }catch{w('C, C++ e Java precisam do servidor local: rode "node server.js" e abra http://localhost:3000','e')}
+}
+async function runFile(n){
+  const e=ext(n),code=files[n];
+  if(e=='js')await runJS(code);else if(e=='py')await runPy(code);else if(L[e]&&CM[e])await runSrv(e,code);else w('Não sei executar arquivos .'+e,'e');
+}
+function runCur(){if(!cur)return w('Nenhum arquivo aberto','e');cmd((CM[ext(cur)]||'run')+' '+cur)}
+
+// ---- terminal ----
+async function cmd(l){
+  w('$ '+l,'p');const [c,...a]=l.trim().split(/\s+/);if(!c)return;
+  const f=a.find(x=>has(x));
+  switch(c){
+    case 'help':w('ls · cat <arq> · touch <arq> · rm <arq> · echo · pwd · date · clear\npython <arq.py> · node <arq.js> · gcc <arq.c> · g++ <arq.cpp> · java <arq.java> · run (arquivo aberto)');break;
+    case 'ls':w(Object.keys(files).join('  '));break;
+    case 'cat':a[0]&&has(a[0])?w(files[a[0]]):w('cat: '+(a[0]||'')+': arquivo não existe','e');break;
+    case 'touch':newF(a[0]);break;
+    case 'rm':delF(a[0]);break;
+    case 'echo':w(a.join(' '));break;
+    case 'pwd':w('/workspace');break;
+    case 'date':w(new Date().toString());break;
+    case 'clear':$('#out').innerHTML='';break;
+    case 'run':cur?await runFile(cur):w('Nenhum arquivo aberto','e');break;
+    case 'python':case 'python3':case 'node':case 'gcc':case 'g++':case 'java':f?await runFile(f):w(c+': arquivo não encontrado','e');break;
+    default:w(c+': comando não encontrado','e');
+  }
+}
+$('#inp').addEventListener('keydown',e=>{const i=e.target;
+  if(e.key=='Enter'){const l=i.value;i.value='';if(l.trim())hist.push(l);hi=hist.length;cmd(l)}
+  else if(e.key=='ArrowUp'&&hi>0){i.value=hist[--hi];e.preventDefault()}
+  else if(e.key=='ArrowDown'){i.value=hist[++hi]||'';hi=Math.min(hi,hist.length)}
+});
+$('#term').onclick=()=>{if(!getSelection().toString())$('#inp').focus()};
+</script></body></html>
